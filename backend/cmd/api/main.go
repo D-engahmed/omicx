@@ -6,19 +6,29 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/D-engahmed/omicx/internal/platform/config"
 	"github.com/D-engahmed/omicx/internal/platform/httpserver"
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
 	handler := httpserver.NewHandler()
 
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 	}
 
-	log.Println("omicx API starting on :8080")
+	log.Printf(
+		"omicx API starting: environment=%s address=%s",
+		cfg.AppEnv,
+		cfg.HTTPAddr,
+	)
 
 	if err := server.ListenAndServe(); err != nil &&
 		!errors.Is(err, http.ErrServerClosed) {

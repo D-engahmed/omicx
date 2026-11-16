@@ -19,6 +19,7 @@ type Config struct {
 	AppEnv                string
 	HTTPAddr              string
 	HTTPReadHeaderTimeout time.Duration
+	LogLevel              string
 }
 
 // Load reads and validates configuration from environment variables.
@@ -29,6 +30,7 @@ func Load() (Config, error) {
 // load accepts an environment lookup function to make configuration
 // independently testable without modifying process environment variables.
 func load(lookup func(string) (string, bool)) (Config, error) {
+	// Application environment
 	appEnv, err := readValue(lookup, "APP_ENV", defaultAppEnv)
 	if err != nil {
 		return Config{}, err
@@ -43,7 +45,33 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		)
 	}
 
-	httpAddr, err := readValue(lookup, "HTTP_ADDR", defaultHTTPAddr)
+	// Logging configuration
+	logLevel, err := readValue(
+		lookup,
+		"LOG_LEVEL",
+		defaultLogLevel(appEnv),
+	)
+	if err != nil {
+		return Config{}, err
+	}
+
+	logLevel = strings.ToLower(logLevel)
+
+	switch logLevel {
+	case "debug", "info", "warn", "error":
+		// Supported logging levels.
+	default:
+		return Config{}, fmt.Errorf(
+			"LOG_LEVEL must be debug, info, warn, or error",
+		)
+	}
+
+	// HTTP server address
+	httpAddr, err := readValue(
+		lookup,
+		"HTTP_ADDR",
+		defaultHTTPAddr,
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -52,6 +80,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	// HTTP read header timeout
 	timeoutValue, err := readValue(
 		lookup,
 		"HTTP_READ_HEADER_TIMEOUT",
@@ -79,7 +108,18 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		AppEnv:                appEnv,
 		HTTPAddr:              httpAddr,
 		HTTPReadHeaderTimeout: readHeaderTimeout,
+		LogLevel:              logLevel,
 	}, nil
+}
+
+// defaultLogLevel determines the default logging level
+// based on the application environment.
+func defaultLogLevel(appEnv string) string {
+	if appEnv == "development" {
+		return "debug"
+	}
+
+	return "info"
 }
 
 // readValue retrieves an environment variable or uses its default value.

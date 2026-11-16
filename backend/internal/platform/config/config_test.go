@@ -23,7 +23,14 @@ func TestLoadDefaults(t *testing.T) {
 	}
 
 	if cfg.HTTPReadHeaderTimeout != 5*time.Second {
-		t.Errorf("unexpected timeout: %v", cfg.HTTPReadHeaderTimeout)
+		t.Errorf(
+			"expected timeout 5s, got %v",
+			cfg.HTTPReadHeaderTimeout,
+		)
+	}
+
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected debug, got %s", cfg.LogLevel)
 	}
 }
 
@@ -32,6 +39,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		"APP_ENV":                  "production",
 		"HTTP_ADDR":                "127.0.0.1:9090",
 		"HTTP_READ_HEADER_TIMEOUT": "10s",
+		"LOG_LEVEL":                "warn",
 	}
 
 	cfg, err := load(func(key string) (string, bool) {
@@ -52,7 +60,82 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	}
 
 	if cfg.HTTPReadHeaderTimeout != 10*time.Second {
-		t.Errorf("unexpected timeout: %v", cfg.HTTPReadHeaderTimeout)
+		t.Errorf(
+			"expected timeout 10s, got %v",
+			cfg.HTTPReadHeaderTimeout,
+		)
+	}
+
+	if cfg.LogLevel != "warn" {
+		t.Errorf("expected warn, got %s", cfg.LogLevel)
+	}
+}
+
+func TestDefaultLogLevelByEnvironment(t *testing.T) {
+	tests := []struct {
+		environment   string
+		expectedLevel string
+	}{
+		{
+			environment:   "development",
+			expectedLevel: "debug",
+		},
+		{
+			environment:   "test",
+			expectedLevel: "info",
+		},
+		{
+			environment:   "staging",
+			expectedLevel: "info",
+		},
+		{
+			environment:   "production",
+			expectedLevel: "info",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.environment, func(t *testing.T) {
+			values := map[string]string{
+				"APP_ENV": tt.environment,
+			}
+
+			cfg, err := load(func(key string) (string, bool) {
+				value, ok := values[key]
+				return value, ok
+			})
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if cfg.LogLevel != tt.expectedLevel {
+				t.Errorf(
+					"expected %s, got %s",
+					tt.expectedLevel,
+					cfg.LogLevel,
+				)
+			}
+		})
+	}
+}
+
+func TestLogLevelNormalization(t *testing.T) {
+	values := map[string]string{
+		"LOG_LEVEL": "  DEBUG  ",
+	}
+
+	cfg, err := load(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected normalized debug, got %s", cfg.LogLevel)
 	}
 }
 
@@ -80,6 +163,12 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 			},
 		},
 		{
+			name: "zero HTTP port",
+			values: map[string]string{
+				"HTTP_ADDR": ":0",
+			},
+		},
+		{
 			name: "invalid timeout",
 			values: map[string]string{
 				"HTTP_READ_HEADER_TIMEOUT": "invalid",
@@ -92,9 +181,27 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 			},
 		},
 		{
+			name: "negative timeout",
+			values: map[string]string{
+				"HTTP_READ_HEADER_TIMEOUT": "-5s",
+			},
+		},
+		{
 			name: "empty HTTP address",
 			values: map[string]string{
 				"HTTP_ADDR": "",
+			},
+		},
+		{
+			name: "invalid log level",
+			values: map[string]string{
+				"LOG_LEVEL": "verbose",
+			},
+		},
+		{
+			name: "empty log level",
+			values: map[string]string{
+				"LOG_LEVEL": "",
 			},
 		},
 	}

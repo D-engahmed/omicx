@@ -98,6 +98,43 @@ func TestLoadCustomConfiguration(t *testing.T) {
 			cfg.HTTPShutdownTimeout,
 		)
 	}
+
+	if cfg.DatabaseURL != values["DATABASE_URL"] {
+		t.Errorf("unexpected database URL")
+	}
+
+	if cfg.DatabaseMaxConns != 20 {
+		t.Errorf("expected 20 max connections, got %d", cfg.DatabaseMaxConns)
+	}
+
+	if cfg.DatabaseMinConns != 2 {
+		t.Errorf("expected 2 min connections, got %d", cfg.DatabaseMinConns)
+	}
+
+	if cfg.DatabaseConnectTimeout != 8*time.Second {
+		t.Errorf(
+			"expected database timeout 8s, got %v",
+			cfg.DatabaseConnectTimeout,
+		)
+	}
+	if cfg.DatabaseURL != values["DATABASE_URL"] {
+		t.Error("database URL was not loaded correctly")
+	}
+
+	if cfg.DatabaseMaxConns != 20 {
+		t.Errorf("expected 20 max connections, got %d", cfg.DatabaseMaxConns)
+	}
+
+	if cfg.DatabaseMinConns != 2 {
+		t.Errorf("expected 2 min connections, got %d", cfg.DatabaseMinConns)
+	}
+
+	if cfg.DatabaseConnectTimeout != 8*time.Second {
+		t.Errorf(
+			"expected database timeout 8s, got %v",
+			cfg.DatabaseConnectTimeout,
+		)
+	}
 }
 
 func TestDefaultLogLevelByEnvironment(t *testing.T) {

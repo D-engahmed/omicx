@@ -286,7 +286,6 @@ func (writer *failingHijackerTestWriter) Hijack() (
 	return nil, nil, errTestHijack
 }
 
-
 type validatingTestWriter struct {
 	*bareTestWriter
 }

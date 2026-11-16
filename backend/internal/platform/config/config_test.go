@@ -39,6 +39,17 @@ func TestLoadDefaults(t *testing.T) {
 			cfg.HTTPShutdownTimeout,
 		)
 	}
+	if cfg.DatabaseMaxConns != 10 {
+		t.Errorf("expected 10 max connections, got %d", cfg.DatabaseMaxConns)
+	}
+
+	if cfg.DatabaseMinConns != 0 {
+		t.Errorf("expected 0 min connections, got %d", cfg.DatabaseMinConns)
+	}
+
+	if cfg.DatabaseConnectTimeout != 5*time.Second {
+		t.Errorf("unexpected database timeout: %v", cfg.DatabaseConnectTimeout)
+	}
 }
 
 func TestLoadCustomConfiguration(t *testing.T) {
@@ -48,6 +59,10 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		"HTTP_READ_HEADER_TIMEOUT": "10s",
 		"LOG_LEVEL":                "warn",
 		"HTTP_SHUTDOWN_TIMEOUT":    "20s",
+		"DATABASE_URL":             "postgres://test:test@localhost:5433/omicx",
+		"DATABASE_MAX_CONNS":       "20",
+		"DATABASE_MIN_CONNS":       "2",
+		"DATABASE_CONNECT_TIMEOUT": "8s",
 	}
 
 	cfg, err := load(func(key string) (string, bool) {

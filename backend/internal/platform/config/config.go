@@ -10,18 +10,25 @@ import (
 )
 
 const (
-	defaultAppEnv                = "development"
-	defaultHTTPAddr              = ":8080"
-	defaultHTTPReadHeaderTimeout = "5s"
-	defaultHTTPShutdownTimeout   = "10s"
+	defaultAppEnv                 = "development"
+	defaultHTTPAddr               = ":8080"
+	defaultHTTPReadHeaderTimeout  = "5s"
+	defaultHTTPShutdownTimeout    = "10s"
+	defaultDatabaseMaxConns       = "10"
+	defaultDatabaseMinConns       = "0"
+	defaultDatabaseConnectTimeout = "5s"
 )
 
 type Config struct {
-	AppEnv                string
-	HTTPAddr              string
-	HTTPReadHeaderTimeout time.Duration
-	HTTPShutdownTimeout   time.Duration
-	LogLevel              string
+	AppEnv                 string
+	HTTPAddr               string
+	HTTPReadHeaderTimeout  time.Duration
+	HTTPShutdownTimeout    time.Duration
+	LogLevel               string
+	DatabaseURL            string
+	DatabaseMaxConns       int32
+	DatabaseMinConns       int32
+	DatabaseConnectTimeout time.Duration
 }
 
 // Load reads and validates configuration from environment variables.
@@ -129,13 +136,83 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 			"HTTP_SHUTDOWN_TIMEOUT must be greater than zero",
 		)
 	}
+	// Database connection URL.
+	// Optional at the config parsing stage; required by the API startup.
+	databaseURL, err := readValue(
+		lookup,
+		"DATABASE_URL",
+		"",
+	)
+	if err != nil {
+		return Config{}, err
+	}
 
+	// Maximum database connections.
+	maxConnsValue, err := readValue(
+		lookup,
+		"DATABASE_MAX_CONNS",
+		defaultDatabaseMaxConns,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+
+	maxConns, err := strconv.ParseInt(maxConnsValue, 10, 32)
+	if err != nil || maxConns < 1 {
+		return Config{}, fmt.Errorf(
+			"DATABASE_MAX_CONNS must be a positive integer",
+		)
+	}
+
+	// Minimum database connections.
+	minConnsValue, err := readValue(
+		lookup,
+		"DATABASE_MIN_CONNS",
+		defaultDatabaseMinConns,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+
+	minConns, err := strconv.ParseInt(minConnsValue, 10, 32)
+	if err != nil || minConns < 0 {
+		return Config{}, fmt.Errorf(
+			"DATABASE_MIN_CONNS must be a non-negative integer",
+		)
+	}
+
+	if minConns > maxConns {
+		return Config{}, fmt.Errorf(
+			"DATABASE_MIN_CONNS cannot exceed DATABASE_MAX_CONNS",
+		)
+	}
+
+	// Database connection timeout.
+	connectTimeoutValue, err := readValue(
+		lookup,
+		"DATABASE_CONNECT_TIMEOUT",
+		defaultDatabaseConnectTimeout,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+
+	connectTimeout, err := time.ParseDuration(connectTimeoutValue)
+	if err != nil || connectTimeout <= 0 {
+		return Config{}, fmt.Errorf(
+			"DATABASE_CONNECT_TIMEOUT must be a valid positive duration",
+		)
+	}
 	return Config{
-		AppEnv:                appEnv,
-		HTTPAddr:              httpAddr,
-		HTTPReadHeaderTimeout: readHeaderTimeout,
-		HTTPShutdownTimeout:   shutdownTimeout,
-		LogLevel:              logLevel,
+		AppEnv:                 appEnv,
+		HTTPAddr:               httpAddr,
+		HTTPReadHeaderTimeout:  readHeaderTimeout,
+		HTTPShutdownTimeout:    shutdownTimeout,
+		LogLevel:               logLevel,
+		DatabaseURL:            databaseURL,
+		DatabaseMaxConns:       int32(maxConns),
+		DatabaseMinConns:       int32(minConns),
+		DatabaseConnectTimeout: connectTimeout,
 	}, nil
 }
 

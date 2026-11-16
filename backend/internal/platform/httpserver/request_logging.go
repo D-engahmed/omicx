@@ -61,9 +61,7 @@ func NewRequestLoggingMiddleware(
 
 			r = r.WithContext(ctx)
 
-			recorder := &responseRecorder{
-				ResponseWriter: w,
-			}
+			recorder, wrappedWriter := newResponseRecorder(w)
 
 			// Log the request even if the handler panics.
 			defer func() {
@@ -91,7 +89,7 @@ func NewRequestLoggingMiddleware(
 				}
 			}()
 
-			next.ServeHTTP(recorder, r)
+			next.ServeHTTP(wrappedWriter, r)
 		})
 	}, nil
 }
@@ -145,11 +143,11 @@ func logRequest(
 }
 
 // responseRecorder tracks the HTTP response status and body size.
-type responseRecorder struct {
-	http.ResponseWriter
-	statusCode   int
-	bytesWritten int
-}
+// type responseRecorder struct {
+// http.ResponseWriter
+// statusCode   int
+// bytesWritten int
+// }
 
 func (recorder *responseRecorder) WriteHeader(statusCode int) {
 	if recorder.statusCode != 0 {

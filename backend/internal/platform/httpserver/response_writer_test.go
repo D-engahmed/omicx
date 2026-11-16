@@ -285,3 +285,41 @@ func (writer *failingHijackerTestWriter) Hijack() (
 ) {
 	return nil, nil, errTestHijack
 }
+
+
+type validatingTestWriter struct {
+	*bareTestWriter
+}
+
+func (writer *validatingTestWriter) WriteHeader(statusCode int) {
+	if statusCode < 100 || statusCode > 999 {
+		panic("invalid WriteHeader code")
+	}
+
+	writer.bareTestWriter.WriteHeader(statusCode)
+}
+
+func TestResponseRecorderDoesNotRecordRejectedStatus(t *testing.T) {
+	original := &validatingTestWriter{
+		bareTestWriter: newBareTestWriter(),
+	}
+
+	recorder, wrapped := newResponseRecorder(original)
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected invalid status to panic")
+			}
+		}()
+
+		wrapped.WriteHeader(42)
+	}()
+
+	if recorder.statusCode != 0 {
+		t.Errorf(
+			"expected status to remain uncommitted, got %d",
+			recorder.statusCode,
+		)
+	}
+}

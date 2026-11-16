@@ -65,8 +65,10 @@ func (recorder *responseRecorder) WriteHeader(statusCode int) {
 		return
 	}
 
-	recorder.statusCode = statusCode
+	// Delegate first. If the underlying writer rejects the status and
+	// panics, do not record a status that was never successfully written.
 	recorder.ResponseWriter.WriteHeader(statusCode)
+	recorder.statusCode = statusCode
 }
 
 // Write records the number of response bytes successfully written.

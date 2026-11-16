@@ -14,13 +14,13 @@ const RequestIDHeader = "X-Request-ID"
 
 type requestIDContextKey struct{}
 
+type Middleware func(http.Handler) http.Handler
+
 // RequestIDFromContext retrieves the server-generated request ID.
 func RequestIDFromContext(ctx context.Context) string {
 	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
 	return requestID
 }
-
-type Middleware func(http.Handler) http.Handler
 
 // NewRequestLoggingMiddleware creates HTTP request logging middleware.
 func NewRequestLoggingMiddleware(
@@ -49,29 +49,28 @@ func NewRequestLoggingMiddleware(
 				return
 			}
 
-			// Add the request ID to the response.
+			// Generate the ID on the server; never trust a client-supplied ID.
 			w.Header().Set(RequestIDHeader, requestID)
 
-			// Add the request ID to the request context.
 			ctx := context.WithValue(
 				r.Context(),
 				requestIDContextKey{},
 				requestID,
 			)
-
 			r = r.WithContext(ctx)
 
+			// The returned writer exposes only optional interfaces supported
+			// by the original ResponseWriter.
 			recorder, wrappedWriter := newResponseRecorder(w)
 
-			// Log the request even if the handler panics.
 			defer func() {
 				recovered := recover()
 				panicked := recovered != nil
 
-				if panicked && recorder.statusCode == 0 {
-					recorder.WriteHeader(
-						http.StatusInternalServerError,
-					)
+				// Do not write an HTTP status after the connection has been
+				// successfully hijacked.
+				if panicked && recorder.statusCode == 0 && !recorder.hijacked {
+					recorder.WriteHeader(http.StatusInternalServerError)
 				}
 
 				logRequest(
@@ -83,7 +82,8 @@ func NewRequestLoggingMiddleware(
 					panicked,
 				)
 
-				// Preserve net/http's normal panic recovery behavior.
+				// Leave panic recovery to net/http or an outer recovery
+				// middleware, after recording this request.
 				if panicked {
 					panic(recovered)
 				}
@@ -133,51 +133,8 @@ func logRequest(
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
 		slog.Int("status", status),
-		slog.Int64(
-			"duration_ms",
-			time.Since(startedAt).Milliseconds(),
-		),
+		slog.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
 		slog.Int("response_bytes", recorder.bytesWritten),
 		slog.Bool("panicked", panicked),
 	)
-}
-
-// responseRecorder tracks the HTTP response status and body size.
-// type responseRecorder struct {
-// http.ResponseWriter
-// statusCode   int
-// bytesWritten int
-// }
-
-func (recorder *responseRecorder) WriteHeader(statusCode int) {
-	if recorder.statusCode != 0 {
-		return
-	}
-
-	recorder.statusCode = statusCode
-	recorder.ResponseWriter.WriteHeader(statusCode)
-}
-
-func (recorder *responseRecorder) Write(body []byte) (int, error) {
-	if recorder.statusCode == 0 {
-		recorder.WriteHeader(http.StatusOK)
-	}
-
-	n, err := recorder.ResponseWriter.Write(body)
-	recorder.bytesWritten += n
-
-	return n, err
-}
-
-func (recorder *responseRecorder) status() int {
-	if recorder.statusCode == 0 {
-		return http.StatusOK
-	}
-
-	return recorder.statusCode
-}
-
-// Unwrap allows http.ResponseController to reach the original writer.
-func (recorder *responseRecorder) Unwrap() http.ResponseWriter {
-	return recorder.ResponseWriter
 }

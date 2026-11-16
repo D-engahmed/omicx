@@ -16,14 +16,14 @@ func main() {
 }
 
 func run() int {
-	// 1. Load and validate configuration.
+	// Load configuration.
 	cfg, err := config.Load()
 	if err != nil {
 		log.Printf("failed to load configuration: %v", err)
 		return 1
 	}
 
-	// 2. Initialize structured logger.
+	// Initialize structured logger.
 	appLogger, err := logger.New(logger.Options{
 		Environment: cfg.AppEnv,
 		Level:       cfg.LogLevel,
@@ -34,36 +34,39 @@ func run() int {
 		return 1
 	}
 
-	// 3. Initialize HTTP handler.
-	handler := httpserver.NewHandler()
+	// Create request logging middleware.
+	requestLogging, err := httpserver.NewRequestLoggingMiddleware(appLogger)
+	if err != nil {
+		appLogger.Error("failed to initialize request middleware", "error", err)
+		return 1
+	}
 
-	// 4. Configure HTTP server.
+	// Build HTTP handler with middleware.
+	handler := requestLogging(httpserver.NewHandler())
+
+	// Configure HTTP server.
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 	}
 
-	// 5. Log server startup.
 	appLogger.Info(
 		"http_server_starting",
 		"environment", cfg.AppEnv,
 		"address", cfg.HTTPAddr,
 	)
 
-	// 6. Start HTTP server.
+	// Start server.
 	if err := server.ListenAndServe(); err != nil &&
 		!errors.Is(err, http.ErrServerClosed) {
-
 		appLogger.Error(
 			"http_server_failed",
 			"error", err,
 		)
-
 		return 1
 	}
 
-	// 7. Log normal shutdown.
 	appLogger.Info("http_server_stopped")
 
 	return 0

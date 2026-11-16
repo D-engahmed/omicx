@@ -1,10 +1,13 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/D-engahmed/omicx/internal/platform/config"
 	"github.com/D-engahmed/omicx/internal/platform/httpserver"
@@ -16,14 +19,14 @@ func main() {
 }
 
 func run() int {
-	// Load configuration.
+	// Load and validate configuration.
 	cfg, err := config.Load()
 	if err != nil {
 		log.Printf("failed to load configuration: %v", err)
 		return 1
 	}
 
-	// Initialize structured logger.
+	// Initialize structured logging.
 	appLogger, err := logger.New(logger.Options{
 		Environment: cfg.AppEnv,
 		Level:       cfg.LogLevel,
@@ -34,36 +37,59 @@ func run() int {
 		return 1
 	}
 
-	// Create request logging middleware.
+	// Build request logging middleware.
 	requestLogging, err := httpserver.NewRequestLoggingMiddleware(appLogger)
 	if err != nil {
-		appLogger.Error("failed to initialize request middleware", "error", err)
+		appLogger.Error(
+			"failed to initialize request middleware",
+			"error", err,
+		)
 		return 1
 	}
 
-	// Build HTTP handler with middleware.
 	handler := requestLogging(httpserver.NewHandler())
 
-	// Configure HTTP server.
+	// Configure the HTTP server.
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 	}
 
+	// Bind the network listener.
+	listener, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		appLogger.Error(
+			"http_server_listen_failed",
+			"address", cfg.HTTPAddr,
+			"error", err,
+		)
+		return 1
+	}
+
 	appLogger.Info(
 		"http_server_starting",
 		"environment", cfg.AppEnv,
-		"address", cfg.HTTPAddr,
+		"address", listener.Addr().String(),
 	)
 
-	// Start server.
-	if err := server.ListenAndServe(); err != nil &&
-		!errors.Is(err, http.ErrServerClosed) {
-		appLogger.Error(
-			"http_server_failed",
-			"error", err,
-		)
+	// Convert termination signals into context cancellation.
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
+
+	// Run the server until it stops or receives a termination signal.
+	if err := serveHTTP(
+		ctx,
+		server,
+		listener,
+		cfg.HTTPShutdownTimeout,
+		appLogger,
+	); err != nil {
+		appLogger.Error("http_server_failed", "error", err)
 		return 1
 	}
 

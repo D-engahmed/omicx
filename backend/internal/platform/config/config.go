@@ -13,12 +13,14 @@ const (
 	defaultAppEnv                = "development"
 	defaultHTTPAddr              = ":8080"
 	defaultHTTPReadHeaderTimeout = "5s"
+	defaultHTTPShutdownTimeout   = "10s"
 )
 
 type Config struct {
 	AppEnv                string
 	HTTPAddr              string
 	HTTPReadHeaderTimeout time.Duration
+	HTTPShutdownTimeout   time.Duration
 	LogLevel              string
 }
 
@@ -104,10 +106,35 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		)
 	}
 
+	// HTTP shutdown timeout
+	shutdownTimeoutValue, err := readValue(
+		lookup,
+		"HTTP_SHUTDOWN_TIMEOUT",
+		defaultHTTPShutdownTimeout,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+
+	shutdownTimeout, err := time.ParseDuration(shutdownTimeoutValue)
+	if err != nil {
+		return Config{}, fmt.Errorf(
+			"HTTP_SHUTDOWN_TIMEOUT must be a valid duration: %w",
+			err,
+		)
+	}
+
+	if shutdownTimeout <= 0 {
+		return Config{}, fmt.Errorf(
+			"HTTP_SHUTDOWN_TIMEOUT must be greater than zero",
+		)
+	}
+
 	return Config{
 		AppEnv:                appEnv,
 		HTTPAddr:              httpAddr,
 		HTTPReadHeaderTimeout: readHeaderTimeout,
+		HTTPShutdownTimeout:   shutdownTimeout,
 		LogLevel:              logLevel,
 	}, nil
 }

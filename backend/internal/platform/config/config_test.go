@@ -32,6 +32,13 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected debug, got %s", cfg.LogLevel)
 	}
+
+	if cfg.HTTPShutdownTimeout != 10*time.Second {
+		t.Errorf(
+			"expected shutdown timeout 10s, got %v",
+			cfg.HTTPShutdownTimeout,
+		)
+	}
 }
 
 func TestLoadCustomConfiguration(t *testing.T) {
@@ -40,6 +47,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		"HTTP_ADDR":                "127.0.0.1:9090",
 		"HTTP_READ_HEADER_TIMEOUT": "10s",
 		"LOG_LEVEL":                "warn",
+		"HTTP_SHUTDOWN_TIMEOUT":    "20s",
 	}
 
 	cfg, err := load(func(key string) (string, bool) {
@@ -68,6 +76,12 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 	if cfg.LogLevel != "warn" {
 		t.Errorf("expected warn, got %s", cfg.LogLevel)
+	}
+	if cfg.HTTPShutdownTimeout != 20*time.Second {
+		t.Errorf(
+			"expected shutdown timeout 20s, got %v",
+			cfg.HTTPShutdownTimeout,
+		)
 	}
 }
 
@@ -144,6 +158,7 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		name   string
 		values map[string]string
 	}{
+
 		{
 			name: "invalid environment",
 			values: map[string]string{
@@ -204,6 +219,25 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 				"LOG_LEVEL": "",
 			},
 		},
+
+		{
+			name: "invalid shutdown timeout",
+			values: map[string]string{
+				"HTTP_SHUTDOWN_TIMEOUT": "invalid",
+			},
+		},
+		{
+			name: "zero shutdown timeout",
+			values: map[string]string{
+				"HTTP_SHUTDOWN_TIMEOUT": "0s",
+			},
+		},
+		{
+			name: "negative shutdown timeout",
+			values: map[string]string{
+				"HTTP_SHUTDOWN_TIMEOUT": "-5s",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -218,4 +252,5 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 			}
 		})
 	}
+
 }

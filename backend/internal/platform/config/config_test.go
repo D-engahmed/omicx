@@ -135,6 +135,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 			cfg.DatabaseConnectTimeout,
 		)
 	}
+
 }
 
 func TestDefaultLogLevelByEnvironment(t *testing.T) {

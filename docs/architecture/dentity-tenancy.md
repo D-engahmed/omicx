@@ -68,24 +68,57 @@ Example:
 
 All operational data belonging to this organization must be tenant-scoped.
 
-### Membership
 
-A membership represents a user's relationship with an organization.
+## Organization Membership Policy
 
-It determines:
+### Business Rule
 
-- Which organization the user belongs to.
-- Which role the user has in that organization.
-- Whether the membership is active, suspended, or revoked.
+A global user can have at most one current organization membership across OMICX.
 
-Example:
+A user may have multiple historical memberships over time.
 
-| User | Organization | Role |
+A membership represents the user's organizational affiliation. It does not necessarily imply an employment contract.
+
+### Membership Statuses
+
+| Status | Meaning | Current membership |
 |---|---|---|
-| Ahmed | Alpha Support | Owner |
-| Ahmed | Beta Solutions | Supervisor |
+| invited | Invitation sent, not accepted | No |
+| active | Currently belongs to the organization | Yes |
+| suspended | Temporarily blocked but still affiliated | Yes |
+| ended | Affiliation permanently terminated | No |
 
-One user can have different roles in different organizations.
+### Membership Lifecycle
+
+```text
+invited -> active -> suspended -> active
+                  -> ended
+          active -> ended
+```
+
+An invitation may also be revoked or expire.
+
+A user cannot activate a membership while another current membership exists.
+
+### Historical Memberships
+
+- Never delete a membership merely because someone leaves an organization.
+- Record the membership end timestamp.
+- Preserve historical organization and role information.
+- Rejoining an organization creates a new membership record.
+- Do not reuse or reactivate an ended membership record.
+- Role changes within an active membership are recorded in the audit trail.
+
+### Database Enforcement
+
+PostgreSQL must enforce at most one current membership per global user.
+
+The uniqueness rule applies to memberships whose status is `active` or `suspended`.
+
+Pending invitations and ended memberships do not count as current memberships.
+
+The restriction must work under concurrent requests, not only through application-level checks.
+
 
 ## 4. Entity relationship model
 

@@ -1,126 +1,216 @@
+# OMICX Database Architecture & Implementation Guide
 
-# Identity and Tenancy Architecture
-
-**Status:** Proposed — pending implementation and review  
-**Ticket:** DB-006  
-**Scope:** Identity, organization membership, authorization, and tenant isolation  
-**Database:** PostgreSQL  
-**Backend:** Go modular monolith
+**Project:** OMICX  
+**Database:** PostgreSQL 17  
+**Schema:** `omicx`  
+**Migration Tool:** Tern  
+**Backend:** Go Modular Monolith  
+**Status:** Initial database foundation — identity and tenancy not yet implemented
 
 ---
 
-## 1. Purpose
+# 1. Database Architecture
 
-This document defines how OMICX identifies users, represents organizations, manages organization membership, and enforces tenant-level authorization.
+## 1.1 Technology Stack
 
-The architecture must support:
-
-- One human user having memberships in multiple organizations.
-- One organization having many users.
-- Different roles for the same user in different organizations.
-- Strict separation of tenant-owned data.
-- Centralized authentication and organization-scoped authorization.
-- Future BPO workflows without prematurely introducing unnecessary organizational hierarchy.
-
-## 2. Core architectural decisions
-
-| Decision | Choice |
-|---|---|
-| Identity model | Global user identity |
-| Tenant model | One organization represents one tenant in v1 |
-| User-to-organization relationship | Many-to-many |
-| Membership model | Explicit organization_memberships table |
-| Role assignment | One role per membership in v1 |
-| Permission model | Role-based permissions |
-| Password storage | Argon2id password hashes |
-| Session storage | Database-backed sessions with hashed refresh tokens |
-| Tenant isolation | Application authorization + PostgreSQL RLS |
-| Database access | Restricted application role |
-| BPO hierarchy | Deferred until validated by real customer requirements |
-
-## 3. Identity versus tenancy
-
-These concepts must remain separate.
-
-### User
-
-A user represents a human identity across the entire OMICX platform.
-
-A user is not owned by an organization.
-
-Example:
-
-- User ID: `user_001`
-- Email: `ahmed@example.com`
-
-The user can belong to multiple organizations without creating duplicate identity records.
-
-### Organization
-
-An organization represents a company using OMICX.
-
-An organization is the tenant boundary in v1.
-
-Example:
-
-- Organization ID: `org_001`
-- Name: `Alpha Support`
-
-All operational data belonging to this organization must be tenant-scoped.
-
-
-## Organization Membership Policy
-
-### Business Rule
-
-A global user can have at most one current organization membership across OMICX.
-
-A user may have multiple historical memberships over time.
-
-A membership represents the user's organizational affiliation. It does not necessarily imply an employment contract.
-
-### Membership Statuses
-
-| Status | Meaning | Current membership |
+| Component | Technology | Responsibility |
 |---|---|---|
-| invited | Invitation sent, not accepted | No |
-| active | Currently belongs to the organization | Yes |
-| suspended | Temporarily blocked but still affiliated | Yes |
-| ended | Affiliation permanently terminated | No |
+| Database | PostgreSQL 17 | Persistent relational storage |
+| Migration tool | Tern | Version-controlled SQL migrations |
+| Database driver | pgx | Go/PostgreSQL communication |
+| Application database role | omicx_app | Runtime database access |
+| Migration database role | omicx_migrator | Schema changes |
+| Tenant isolation | PostgreSQL RLS | Database-level tenant protection |
 
-### Membership Lifecycle
+## 1.2 Database Organization
+
+OMICX uses PostgreSQL schemas to organize database objects.
+
+Initial structure:
 
 ```text
-invited -> active -> suspended -> active
-                  -> ended
-          active -> ended
+PostgreSQL Server
+│
+└── Database: omicx
+    │
+    ├── Schema: public
+    │
+    └── Schema: omicx
+        │
+        ├── users
+        ├── organizations
+        ├── organization_memberships
+        ├── roles
+        ├── permissions
+        ├── role_permissions
+        ├── password_credentials
+        └── user_sessions
 ```
 
-An invitation may also be revoked or expire.
+The structure above represents the intended identity foundation, not the current implemented database.
 
-A user cannot activate a membership while another current membership exists.
+## 1.3 Database Responsibilities
 
-### Historical Memberships
+The database is responsible for:
 
-- Never delete a membership merely because someone leaves an organization.
-- Record the membership end timestamp.
-- Preserve historical organization and role information.
-- Rejoining an organization creates a new membership record.
-- Do not reuse or reactivate an ended membership record.
-- Role changes within an active membership are recorded in the audit trail.
+- Persistent application data.
+- Referential integrity.
+- Uniqueness constraints.
+- Transactional consistency.
+- Tenant data separation.
+- Database-level security.
+- Migration history.
 
-### Database Enforcement
+Business authorization remains the responsibility of the Go application, supported by PostgreSQL RLS.
 
-PostgreSQL must enforce at most one current membership per global user.
+---
 
-The uniqueness rule applies to memberships whose status is `active` or `suspended`.
+# 2. Identity and Organization Model
 
-Pending invitations and ended memberships do not count as current memberships.
+## 2.1 Users
 
-The restriction must work under concurrent requests, not only through application-level checks.
+The `users` table represents global human identities.
 
+A user has one OMICX account regardless of how many companies they work for throughout their lifetime.
 
-## 4. Entity relationship model
+Example:
+
+| id | email | status |
+|---|---|---|
+| user-001 | ahmed@example.com | active |
+
+Rules:
+
+- Email must be globally unique after normalization.
+- A user is not owned by an organization.
+- A user can exist without an organization.
+- Passwords are not stored in this table.
+- Account suspension is independent of organization membership.
+
+## 2.2 Organizations
+
+The `organizations` table represents companies using OMICX.
+
+Each organization is an independent tenant.
+
+Example:
+
+| id | name | slug | status |
+|---|---|---|---|
+| org-001 | Alpha Support | alpha-support | active |
+| org-002 | Beta Solutions | beta-solutions | active |
+
+Each organization owns its operational data.
+
+Examples:
+
+- Contacts
+- Conversations
+- Messages
+- Teams
+- Knowledge documents
+- Workflows
+- Automation executions
+- Analytics
+- Usage records
+
+An organization must never access another organization's private records.
+
+## 2.3 Organization Memberships
+
+The `organization_memberships` table connects users to organizations.
+
+It represents an organizational affiliation over a period of time.
+
+**Business rule: One user can have at most one current organization membership globally.**
+
+Multiple historical memberships are allowed.
+
+Example:
+
+| User | Organization | Role | Status |
+|---|---|---|---|
+| Ahmed | Alpha Support | Agent | ended |
+| Ahmed | Beta Solutions | Supervisor | active |
+
+Membership statuses:
+
+| Status | Meaning |
+|---|---|
+| invited | Invitation pending |
+| active | Current membership |
+| suspended | Temporarily blocked, still affiliated |
+| ended | Historical membership |
+
+An ended membership is never reactivated. Rejoining creates a new membership record.
+
+A suspended membership still counts as current.
+
+## 2.4 Database Enforcement
+
+PostgreSQL must enforce the one-current-membership rule.
+
+Intended index:
+
+```sql
+CREATE UNIQUE INDEX
+organization_memberships_one_current_per_user
+ON omicx.organization_memberships (user_id)
+WHERE status IN ('active', 'suspended');
+```
+
+This index will be created in the membership migration, after the table exists.
+
+Pending invitations do not count as current memberships.
+
+Accepting an invitation must be transactional and must fail if the user already has a current membership.
+
+## 2.5 Roles and Permissions
+
+Roles describe organizational responsibilities.
+
+Initial roles:
+
+| Role | Responsibility |
+|---|---|
+| owner | Organization ownership |
+| admin | Organization administration |
+| supervisor | Team supervision |
+| agent | Customer support |
+| analyst | Reporting and analytics |
+| billing_admin | Billing management |
+
+Permissions describe individual capabilities.
+
+Examples:
+
+```text
+conversation.read
+conversation.assign
+conversation.close
+contact.read
+contact.update
+team.manage
+agent.manage
+knowledge.read
+knowledge.manage
+analytics.read
+billing.read
+billing.manage
+organization.manage
+```
+
+A membership receives one role in v1.
+
+Role-to-permission relationships are stored in `role_permissions`.
+
+The backend checks permissions rather than trusting role names sent by clients.
+
+---
+
+# 3. Database Relationships
+
+The intended entity relationships:
 
 ```mermaid
 erDiagram
@@ -128,334 +218,64 @@ erDiagram
     ORGANIZATIONS ||--o{ ORGANIZATION_MEMBERSHIPS : contains
     ROLES ||--o{ ORGANIZATION_MEMBERSHIPS : assigned
     ROLES ||--o{ ROLE_PERMISSIONS : grants
-    PERMISSIONS ||--o{ ROLE_PERMISSIONS : included
+    PERMISSIONS ||--o{ ROLE_PERMISSIONS : contains
     USERS ||--o{ PASSWORD_CREDENTIALS : authenticates
     USERS ||--o{ USER_SESSIONS : owns
-    ORGANIZATIONS ||--o{ USER_SESSIONS : session_context
 
-    USERS {
-        uuid id PK
-        text email UK
-        text status
-        timestamptz email_verified_at
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    ORGANIZATIONS {
-        uuid id PK
-        text name
-        text slug UK
-        text status
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    ORGANIZATION_MEMBERSHIPS {
-        uuid id PK
-        uuid organization_id FK
-        uuid user_id FK
-        uuid role_id FK
-        text status
-        timestamptz joined_at
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    ROLES {
-        uuid id PK
-        text code UK
-        text name
-        text description
-    }
-
-    PERMISSIONS {
-        uuid id PK
-        text code UK
-        text description
-    }
-
-    ROLE_PERMISSIONS {
-        uuid role_id FK
-        uuid permission_id FK
-    }
-
-    PASSWORD_CREDENTIALS {
-        uuid id PK
-        uuid user_id FK
-        text password_hash
-        timestamptz password_changed_at
-    }
-
-    USER_SESSIONS {
-        uuid id PK
-        uuid user_id FK
-        uuid active_organization_id FK
-        text refresh_token_hash
-        timestamptz expires_at
-        timestamptz revoked_at
-    }
+    ORGANIZATIONS ||--o{ CONTACTS : owns
+    ORGANIZATIONS ||--o{ CONVERSATIONS : owns
+    CONTACTS ||--o{ CONVERSATIONS : participates
+    CONVERSATIONS ||--o{ MESSAGES : contains
 ```
 
-This is a conceptual model. The actual migration may add constraints, indexes, and additional security fields.
+This is the target model. The operational tables will be introduced in their respective feature migrations.
 
-## 5. Table responsibilities
+---
 
-### 5.1 users
+# 4. Database Security
 
-Purpose: Store global human identities.
+## 4.1 Database Roles
 
-Rules:
+We separate two responsibilities.
 
-- Each user has one globally unique canonical email.
-- Email normalization is performed consistently before persistence.
-- User identity is independent of organization membership.
-- A user can exist without an organization membership.
-- Account status controls whether authentication is allowed.
+**omicx_migrator**
 
-Suggested statuses:
+- Creates tables.
+- Alters database structures.
+- Creates indexes.
+- Applies migrations.
 
-- `active`
-- `suspended`
-- `disabled`
+**omicx_app**
 
-Do not add `organization_id` or `role_id` to this table.
+- Executes application queries.
+- Reads and writes permitted data.
+- Operates under RLS policies.
+- Does not own protected tenant tables.
+- Cannot bypass RLS.
+- Is not a superuser.
 
-### 5.2 organizations
+The migration account must not be used as the normal API connection.
 
-Purpose: Represent tenants.
+## 4.2 Row-Level Security
 
-Rules:
-
-- Each organization has a unique slug.
-- Organization status controls whether normal tenant operations are permitted.
-- Organization-owned records must reference the organization.
-- An organization cannot access another organization's operational data.
-
-Suggested statuses:
-
-- `active`
-- `suspended`
-- `closed`
-
-### 5.3 organization_memberships
-
-Purpose: Connect global users to organizations.
-
-Rules:
-
-- A user can have multiple memberships.
-- An organization can have multiple members.
-- `(organization_id, user_id)` must be unique.
-- Each membership has exactly one role in v1.
-- Membership status is independent of user status.
-- Revoking a membership must not delete the global user account.
-
-Suggested statuses:
-
-- `active`
-- `invited`
-- `suspended`
-- `revoked`
-
-A user with a suspended membership in one organization may still have an active membership in another.
-
-### 5.4 roles
-
-Purpose: Define organization-level responsibility categories.
-
-Initial built-in roles:
-
-| Code | Purpose |
-|---|---|
-| owner | Organization ownership |
-| admin | Organization administration |
-| supervisor | Operational supervision |
-| agent | Customer support operations |
-| analyst | Read-only reporting and analytics |
-| billing_admin | Billing and subscription management |
-
-These are global built-in role definitions in v1.
-
-The role assigned to a user is stored on the membership, not on the global user.
-
-### 5.5 permissions
-
-Purpose: Define individual capabilities.
-
-Initial examples:
-
-```text
-conversation.read
-conversation.assign
-conversation.close
-
-contact.read
-contact.update
-
-team.read
-team.manage
-
-agent.read
-agent.manage
-
-knowledge.read
-knowledge.manage
-
-analytics.read
-
-billing.read
-billing.manage
-
-organization.read
-organization.manage
-```
-
-A permission represents an action that the backend can authorize.
-
-A role groups permissions through `role_permissions`.
-
-The backend must check permissions, not simply trust a role name supplied by a client.
-
-### 5.6 role_permissions
-
-Purpose: Map roles to permissions.
-
-Rules:
-
-- A role can have many permissions.
-- A permission can belong to many roles.
-- `(role_id, permission_id)` must be unique.
-- Built-in permission assignments should be managed through versioned migrations or controlled seed logic.
-
-### 5.7 password_credentials
-
-Purpose: Keep authentication secrets separate from public user identity data.
-
-Rules:
-
-- Never store plaintext passwords.
-- Store Argon2id password hashes in PHC format.
-- Benchmark and configure the hashing parameters.
-- Never log password hashes.
-- Password changes must update the password-change timestamp.
-
-### 5.8 user_sessions
-
-Purpose: Track authenticated sessions.
-
-Rules:
-
-- Store hashes of refresh tokens, never reusable raw refresh tokens.
-- Support expiration and revocation.
-- Associate each session with its authenticated user.
-- An optional active organization may be stored as session context.
-- A session's active organization is not proof of membership or authorization.
-- Revalidate membership and permissions on protected requests.
-
-## 6. Authentication flow
-
-1. User submits email and password.
-2. Backend looks up the canonical email.
-3. Backend verifies the password hash.
-4. Backend verifies that the user account is active.
-5. Backend establishes an authenticated session.
-6. Backend retrieves the user's active organization memberships.
-7. User selects an organization if more than one is available.
-8. Backend verifies that the selected membership is active.
-9. Backend establishes the organization context for the request.
-10. Authorization checks determine whether the requested operation is allowed.
-
-Authentication answers:
-
-**Who is this user?**
-
-Authorization answers:
-
-**What can this user do in this organization?**
-
-These are separate security responsibilities.
-
-## 7. Multi-organization behavior
-
-Example:
-
-Ahmed belongs to two organizations.
-
-| Organization | Membership role |
-|---|---|
-| Alpha Support | Owner |
-| Beta Solutions | Supervisor |
-
-When Ahmed selects Alpha Support, permissions are evaluated through his Alpha Support membership.
-
-When he selects Beta Solutions, permissions are evaluated through his Beta Solutions membership.
-
-Changing the active organization must never grant permissions from the previous organization.
-
-The backend must not use a user's first membership as an implicit default.
-
-## 8. Tenant isolation
-
-Every tenant-owned operational table must contain `organization_id`.
-
-Examples:
-
-- contacts
-- conversations
-- messages
-- teams
-- agents or organization-scoped agent profiles
-- assignments
-- knowledge documents
-- workflows
-- automation executions
-- quality evaluations
-- usage records
-
-Global identity tables are exceptions:
-
-- users
-- password_credentials
-- global permission definitions
-- global built-in roles
-
-Tenant-owned tables must use tenant-aware relationships.
-
-Where one tenant-owned record references another, use composite foreign keys where appropriate.
+Every tenant-owned operational table must have an `organization_id`.
 
 Example:
 
 ```sql
-UNIQUE (organization_id, id)
+ALTER TABLE omicx.contacts
+ENABLE ROW LEVEL SECURITY;
 ```
 
-Then:
-
-```sql
-FOREIGN KEY (organization_id, contact_id)
-REFERENCES contacts (organization_id, id)
-```
-
-This prevents a conversation belonging to one organization from referencing a contact belonging to another organization.
-
-## 9. Row-Level Security
-
-PostgreSQL Row-Level Security (RLS) is a second enforcement layer.
-
-Application authorization and RLS serve different purposes:
-
-- Application authorization determines whether a user may perform an operation.
-- RLS restricts which tenant rows the database session can access.
-
-The intended request lifecycle:
+The application must:
 
 1. Authenticate the user.
-2. Verify active organization membership.
-3. Begin a database transaction.
-4. Set the verified organization ID using transaction-local configuration.
-5. Execute tenant-scoped queries.
-6. Commit or roll back the transaction.
+2. Verify their current membership.
+3. Resolve their organization.
+4. Begin a database transaction.
+5. Set transaction-local organization context.
+6. Execute tenant-scoped queries.
+7. Commit or roll back.
 
 Example:
 
@@ -467,109 +287,362 @@ SELECT set_config(
 );
 ```
 
-The third argument makes the setting transaction-local.
+RLS policies will be implemented and tested in a later migration.
 
-Important:
+Missing tenant context must fail closed.
 
-- Never use a persistent session-level tenant setting with a connection pool.
-- Never accept the organization context without server-side membership verification.
-- RLS must be tested using `omicx_app`, not a superuser.
-- The runtime role must not own the protected tables.
-- The runtime role must not have `BYPASSRLS`.
-- Consider `FORCE ROW LEVEL SECURITY` where appropriate.
-- Test missing tenant context, cross-tenant access, and pooled connection reuse.
+---
 
-RLS is not considered implemented merely because a policy exists. It must be tested through the actual application database role.
+# 5. Local Development Environment
 
-## 10. Database privilege separation
+## 5.1 Prerequisites
 
-Two database responsibilities must be separated.
+Install:
 
-### Migration account
+- Docker Desktop
+- Go
+- Git
+- Tern
+- PostgreSQL client (`psql`)
 
-Responsible for:
+## 5.2 Start PostgreSQL
 
-- Applying schema migrations.
-- Creating and altering database objects.
-- Managing schema changes.
+Open PowerShell:
 
-### Application account
+```powershell
+cd D:\my_company\mgx\omicx\backend
+```
 
-Responsible for:
+Start the database:
 
-- Reading and writing permitted application data.
-- Executing normal runtime queries.
-- Operating under RLS policies.
+```powershell
+docker compose up -d
+```
 
-The application account must not:
+Check containers:
 
-- Be a superuser.
-- Create databases.
-- Create roles.
-- Bypass RLS.
-- Own protected tenant tables.
+```powershell
+docker ps
+```
 
-Production should use a dedicated least-privilege migration role rather than relying on a superuser.
+Expected OMICX container:
 
-## 11. Platform administrators
+```text
+NAME             STATUS
+omicx-postgres   Up (healthy)
+```
 
-Platform administrators are not organization owners.
+Expected port mapping:
 
-A platform administrator operates the OMICX platform itself.
+```text
+127.0.0.1:5433 -> 5432
+```
 
-An organization owner operates their own tenant.
+Port 5433 is the host port. PostgreSQL listens on port 5432 inside the container.
 
-Do not introduce a global `users.is_admin` field as a shortcut for platform administration.
+## 5.3 Connect to PostgreSQL
 
-Platform-level access requires a separate, explicitly designed authorization mechanism and audit trail.
+```powershell
+docker exec -it omicx-postgres psql -U omicx -d omicx
+```
 
-## 12. Deferred decisions
+Inspect databases:
 
-The following are deliberately out of scope for v1:
+```sql
+\l
+```
 
-- Multiple roles per membership.
-- Organization-defined custom roles.
-- ClientAccount / Program / Sector hierarchy.
-- Complex BPO workforce hierarchy.
-- Social identity providers.
-- Enterprise SSO.
-- Fine-grained resource-level sharing between organizations.
+Inspect schemas:
 
-These should be introduced only when validated requirements justify their complexity.
+```sql
+\dn
+```
 
-## 13. Security and correctness acceptance criteria
+Inspect tables:
 
-- [ ] One user can have memberships in multiple organizations.
-- [ ] One organization can have multiple users.
-- [ ] A user can have different roles in different organizations.
-- [ ] Duplicate memberships are rejected.
-- [ ] Suspended memberships cannot authorize access.
-- [ ] Revoked memberships cannot authorize access.
-- [ ] Inactive users cannot authenticate.
-- [ ] Passwords are never stored in plaintext.
-- [ ] Refresh tokens are stored as hashes.
-- [ ] Tenant-owned tables include organization ownership.
-- [ ] Cross-tenant foreign-key references are rejected.
-- [ ] API authorization is organization-scoped.
-- [ ] RLS prevents cross-tenant access.
-- [ ] Missing tenant context fails closed.
-- [ ] Connection-pool reuse cannot leak tenant context.
-- [ ] Runtime database account is not a superuser or table owner.
-- [ ] Platform administration is separated from tenant roles.
+```sql
+\dt omicx.*
+```
 
-## 14. Implementation sequence
+Inspect a specific table:
 
-| Step | Deliverable |
+```sql
+\d omicx.users
+```
+
+Exit:
+
+```sql
+\q
+```
+
+Important: `-U omicx` uses the database role named `omicx`. Do not assume it is the restricted application role. Verify role attributes separately.
+
+## 5.4 Inspect Database Roles
+
+Inside psql:
+
+```sql
+SELECT
+    rolname,
+    rolsuper,
+    rolcreatedb,
+    rolcreaterole,
+    rolbypassrls
+FROM pg_roles
+WHERE rolname IN (
+    'omicx',
+    'omicx_app',
+    'omicx_migrator'
+);
+```
+
+The runtime application account must not have superuser, role-creation, database-creation, or RLS-bypass privileges.
+
+---
+
+# 6. Migration Management with Tern
+
+## 6.1 Why Migrations?
+
+We never manually create application tables in the database.
+
+Every structural change must be represented by a version-controlled migration.
+
+Example:
+
+```text
+backend/
+│
+├── migrations/
+│   ├── 001_create_omicx_schema.sql
+│   ├── 002_identity_tenancy.sql
+│   ├── 003_initial_roles_permissions.sql
+│   └── ...
+│
+└── tern.conf
+```
+
+This ensures that:
+
+- Every developer can reproduce the database.
+- Database changes are reviewable.
+- Migration history is tracked.
+- Deployment uses the same schema changes.
+- Rollbacks can be planned and tested.
+
+## 6.2 Inspect Existing Migrations
+
+From PowerShell:
+
+```powershell
+cd D:\my_company\mgx\omicx\backend
+
+Get-ChildItem .\migrations
+```
+
+Inspect migration 001:
+
+```powershell
+Get-Content .\migrations\001_create_omicx_schema.sql
+```
+
+Inspect Tern configuration:
+
+```powershell
+Get-Content .\tern.conf
+```
+
+Do not expose database passwords when sharing configuration output.
+
+## 6.3 Tern Migration Format
+
+A migration contains an upward SQL section and an optional downward SQL section.
+
+Example:
+
+```sql
+CREATE TABLE omicx.example (
+    id UUID PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+---- create above / drop below ----
+
+DROP TABLE omicx.example;
+```
+
+The first section applies the migration.
+
+The second section reverses it.
+
+Each migration is executed transactionally by Tern by default.
+
+## 6.4 Check Migration Status
+
+From the directory containing the actual `tern.conf`:
+
+```powershell
+tern status
+```
+
+This reports the database's current migration version and available migrations.
+
+The migration configuration must point to the intended database.
+
+## 6.5 Create a New Migration
+
+After reviewing the current migration files:
+
+```powershell
+tern new identity_tenancy
+```
+
+Tern creates the next numbered migration.
+
+For example:
+
+```text
+002_identity_tenancy.sql
+```
+
+The exact filename depends on the existing migration sequence.
+
+Never assume the next number without inspecting the directory and migration status.
+
+## 6.6 Review Before Applying
+
+Before running a migration:
+
+1. Review every CREATE TABLE statement.
+2. Review primary and foreign keys.
+3. Review unique constraints.
+4. Review indexes.
+5. Review status constraints.
+6. Review tenant ownership.
+7. Review the rollback section.
+8. Verify the migration account and database connection.
+
+## 6.7 Apply Migrations
+
+From the directory containing the correct Tern configuration:
+
+```powershell
+tern migrate
+```
+
+This applies pending migrations through the latest version.
+
+Check status afterward:
+
+```powershell
+tern status
+```
+
+## 6.8 Verify the Database
+
+Connect:
+
+```powershell
+docker exec -it omicx-postgres psql -U omicx -d omicx
+```
+
+List tables:
+
+```sql
+\dt omicx.*
+```
+
+Inspect a table:
+
+```sql
+\d omicx.users
+```
+
+Check migration history using the version table configured for Tern:
+
+```sql
+SELECT * FROM public.schema_version;
+```
+
+The version table's actual name and schema must be verified from `tern.conf`; `public.schema_version` is only an example.
+
+---
+
+# 7. Identity and Tenancy Migration Plan
+
+The identity foundation will be implemented in controlled steps.
+
+| Migration | Responsibility |
 |---|---|
-| DB-006-A | Separate migration and application database accounts |
-| DB-006-B | Review and approve identity/tenancy architecture |
-| DB-006-C | Create identity and tenancy migration |
-| DB-006-D | Seed built-in roles and permissions |
-| DB-006-E | Implement identity and membership domain models |
-| DB-006-F | Implement authentication and session management |
-| DB-006-G | Implement organization selection and authorization |
-| DB-006-H | Add tenant-aware database access |
-| DB-006-I | Enable and test RLS |
-| DB-006-J | Add cross-tenant security integration tests |
+| 001 | Create OMICX schema |
+| 002 | Users, organizations, memberships, credentials, sessions, roles and permissions |
+| 003 | Initial built-in role and permission assignments |
+| 004 | Membership and authentication constraints refinements, if required |
+| 005 | Tenant isolation foundation |
 
-No later phase should be marked complete without its acceptance tests.
+Migration 002 must be reviewed as one coherent identity schema before execution.
+
+Do not create redundant migrations simply to separate related tables unnecessarily.
+
+---
+
+# 8. Implementation Acceptance Criteria
+
+The identity database foundation is not complete until:
+
+- [ ] Users table exists.
+- [ ] Organizations table exists.
+- [ ] Organization memberships table exists.
+- [ ] Roles table exists.
+- [ ] Permissions table exists.
+- [ ] Role-permission relationships exist.
+- [ ] Password credentials table exists.
+- [ ] User sessions table exists.
+- [ ] A user cannot have two current memberships.
+- [ ] Historical memberships are preserved.
+- [ ] Rejoining creates a new membership.
+- [ ] Membership status constraints work.
+- [ ] Foreign keys work.
+- [ ] Required indexes exist.
+- [ ] Application and migration database roles are separated.
+- [ ] Database migrations run successfully.
+- [ ] Migration rollback is tested where supported.
+- [ ] Cross-tenant access tests pass.
+
+---
+
+# 9. Current Implementation Status
+
+**Verified state as of November 18, 2026**
+
+| Component | Status |
+|---|---|
+| PostgreSQL Docker container | Running |
+| OMICX database | Exists |
+| OMICX schema | Exists |
+| Migration 001 | Previously reported as applied; verify Tern status |
+| Users | Not implemented |
+| Organizations | Not implemented |
+| Memberships | Not implemented |
+| RBAC | Not implemented |
+| Authentication tables | Not implemented |
+| RLS | Not implemented |
+| Migration 002 | Not created/applied |
+
+---
+
+# 10. Development Rules
+
+1. Never manually modify production database structures.
+2. Every schema change must have a migration.
+3. Never use the application account to apply migrations.
+4. Never trust client-provided organization IDs without server-side verification.
+5. Every tenant-owned record must have tenant ownership.
+6. Never delete historical membership records merely because a user leaves.
+7. Never mark a database feature complete without tests.
+8. Review the SQL before executing it.
+9. Test migrations against a clean local database.
+10. Preserve database volumes during normal development.
+
+**The database schema is the foundation of OMICX. Identity, tenancy and authorization must be correct before implementing the operational business domains.**

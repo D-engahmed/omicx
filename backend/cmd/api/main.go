@@ -68,7 +68,42 @@ func run() int {
 	// Keep the pool alive until the API has completely stopped.
 	defer pool.Close()
 
-	appLogger.Info("database_connected")
+	// Verify that the API uses the restricted runtime database account.
+	verifyCtx, cancelVerify := context.WithTimeout(
+		context.Background(),
+		cfg.DatabaseConnectTimeout,
+	)
+
+	var databaseRole string
+
+	err = pool.QueryRow(
+		verifyCtx,
+		"SELECT current_user",
+	).Scan(&databaseRole)
+
+	cancelVerify()
+
+	if err != nil {
+		appLogger.Error(
+			"database_identity_verification_failed",
+			"error", err,
+		)
+		return 1
+	}
+
+	if databaseRole != "omicx_app" {
+		appLogger.Error(
+			"database_runtime_role_invalid",
+			"expected_role", "omicx_app",
+			"actual_role", databaseRole,
+		)
+		return 1
+	}
+
+	appLogger.Info(
+		"database_connected",
+		"database_role", databaseRole,
+	)
 
 	// Create request logging middleware.
 	requestLogging, err := httpserver.NewRequestLoggingMiddleware(appLogger)
